@@ -1,0 +1,239 @@
+#include <Arduino.h>
+#include <U8g2lib.h>
+#include "WiFi.h"
+#include "PubSubClient.h"
+#include "Ticker.h"
+#include "ArduinoJson.h"
+
+#define A_PIN 4
+#define D_PIN 0
+
+const char *ssid = "iPhone 13";                   // wifi id
+const char *password = "Lkc20040509";          // wifi 密码
+const char *mqtt_server = "mqtts.heclouds.com"; // onenet 的 IP 地址
+const int port = 1883;                          // 端口号
+
+#define mqtt_pubid "xe7J7J62KU" // 产品 ID
+#define mqtt_devid "hall_3144" // 设备名称
+// 鉴权信息
+#define mqtt_password "version=2018-10-31&res=products%2Fxe7J7J62KU%2Fdevices%2Fhall_3144&et=1893427200&method=md5&sign=9Y9ZF85ZeWRFg3x4hv2uIQ%3D%3D" // 鉴权信息
+
+
+int mag = 0;
+float hall = 3.3;
+
+String cc = "磁场";
+String test1 = "XX";
+
+U8G2_SSD1306_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, SCL, SDA, U8X8_PIN_NONE); // 实例化
+
+WiFiClient espClient;           // 创建一个WIFI连接客户端
+PubSubClient client(espClient); // 创建一个PubSub客户端，传入创建的WIFI客户端
+Ticker tim1;
+Ticker tim2;
+
+// 设备上传数据的post主题
+#define ONENET_TOPIC_PROP_POST "$sys/" mqtt_pubid "/" mqtt_devid "/thing/property/post"
+// 接收下发属性设置主题
+#define ONENET_TOPIC_PROP_SET "$sys/"   "/" mqtt_devid "/thing/property/set"
+// 接收下发属性设置成功的回复主题
+#define ONENET_TOPIC_PROP_SET_REPLY "$sys/" mqtt_pubid "/" mqtt_devid "/thing/property/set_reply"
+
+// 接收设备属性获取命令主题
+#define ONENET_TOPIC_PROP_GET "$sys/" mqtt_pubid "/" mqtt_devid "/thing/property/get"
+// 接收设备属性获取命令成功的回复主题
+#define ONENET_TOPIC_PROP_GET_REPLY "$sys/" mqtt_pubid "/" mqtt_devid "/thing/property/get_reply"
+
+// 这是post上传数据使用的模板
+#define ONENET_POST_BODY_FORMAT "{\"id\":\"%u\",\"params\":%s}"
+int postMsgId = 0; // 记录已经post了多少条
+
+float iAnalogSig;
+int iDigitalSig;
+
+// 连接WiFi相关函数
+void setupWifi()
+{
+  delay(10);
+  Serial.println("connect WiFi");
+  WiFi.begin(ssid, password);
+
+  while (WiFi.status() != WL_CONNECTED)
+  {
+    delay(500);
+    Serial.print(".");
+  }
+
+  Serial.println("successfully connected");
+  Serial.println("IP address：");
+  Serial.println(WiFi.localIP());
+}
+
+// 向主题发送模拟的温湿度数据
+void sendLuminance()
+{
+  if (client.connected())
+  {
+    // 先拼接出json字符串
+    char param[199];
+    char jsonBuf[299];
+
+    sprintf(param, "{\"mag_value\":{\"value\":%d}, \"hall_value\":{\"value\":%.2f}}", mag, hall); // 我们把要上传的数据写在param里
+
+    postMsgId += 1;
+    sprintf(jsonBuf, ONENET_POST_BODY_FORMAT, postMsgId, param);
+
+    //    {"id":"3","params":{"wendu":{"value":25.7}}}
+
+    // 再从mqtt客户端中发布post消息
+    if (client.publish(ONENET_TOPIC_PROP_POST, jsonBuf))
+    {
+      Serial.print("post message to cloud: ");
+      Serial.println(jsonBuf);
+    }
+    else
+    {
+      Serial.println("publish message to cloud failed!");
+    }
+  }
+}
+
+// 重连函数，如果客户端断线，可以通过此函数重连
+void clientReconnect()
+{
+  while (!client.connected())
+  {
+    Serial.println("reconnect mqtt......");
+    if (client.connect(mqtt_devid, mqtt_pubid, mqtt_password))
+    {
+      Serial.println("connected");
+    }
+    else
+    {
+      Serial.println("failed");
+      Serial.println(client.state());
+      Serial.println("try again in 5 sec");
+      delay(5000);
+    }
+  }
+}
+
+void callback(char *topic, byte *payload, unsigned int length)
+{
+  Serial.println("message rev:");
+  Serial.println(topic);
+  for (size_t i = 0; i < length; i++)
+  {
+    Serial.print((char)payload[i]);
+  }
+  Serial.println();
+
+  if (strstr(topic, ONENET_TOPIC_PROP_SET))
+  {
+    DynamicJsonDocument doc(100);
+    DeserializationError error = deserializeJson(doc, payload);
+    if (error)
+    {
+      Serial.println("parse json falled");
+      return;
+    }
+    JsonObject setAlinkMsgObj = doc.as<JsonObject>();
+    serializeJsonPretty(setAlinkMsgObj, Serial);
+    String str = setAlinkMsgObj["id"];
+    Serial.println(str);
+    char sendbuf[100];
+    sprintf(sendbuf, "{\"id\": \"%s\",\"code\":200,\"msg\":\"success\"}", str.c_str());
+    Serial.println(sendbuf);
+    client.publish(ONENET_TOPIC_PROP_SET_REPLY, sendbuf);
+  }
+
+  if (strstr(topic, ONENET_TOPIC_PROP_GET))
+  {
+    DynamicJsonDocument doc(100);
+    DeserializationError error = deserializeJson(doc, payload);
+    if (error)
+    {
+      Serial.println("parse json falled");
+      return;
+    }
+    JsonObject setAlinkMagObj = doc.as<JsonObject>();
+    serializeJsonPretty(setAlinkMagObj, Serial);
+    String str = setAlinkMagObj["id"];
+    Serial.println(str);
+    char sendbuf[100];
+    sprintf(sendbuf, "{\"id\": \"%s\",\"code\":200,\"mag\":\"success\",\"data\":{\"temp\":%.2f,\"humi\":%.2f}}", str.c_str(), 0, 3);
+    Serial.println(sendbuf);
+    client.publish(ONENET_TOPIC_PROP_GET_REPLY, sendbuf);
+  }
+}
+
+void setup()
+{
+  Serial.begin(9600);
+  delay(3000);
+  setupWifi(); // 调用函数连接WIFI
+
+  client.setServer(mqtt_server, port);                   // 设置客户端连接的服务器,连接Onenet服务器，使用6002端口
+  client.connect(mqtt_devid, mqtt_pubid, mqtt_password); // 客户端连接到指定的产品的指定设备.同时输入鉴权信息
+  if (client.connected())
+    Serial.println("OneNet is connected!"); // 判断一下是不是连好了.
+  client.subscribe(ONENET_TOPIC_PROP_SET);
+  client.subscribe(ONENET_TOPIC_PROP_GET);
+  client.setCallback(callback);
+  tim1.attach(1, sendLuminance); // 定时每1秒调用一 次发送数据函数 sendTempAndHumi
+
+  Serial2.begin(115200);
+  u8g2.setBusClock(1000000);
+  u8g2.begin();
+  u8g2.enableUTF8Print();
+
+  initArduino();
+  Serial.begin(115200);
+
+  Serial.println("-----Hall Sensor 3144E-----");
+
+  iAnalogSig = 0;
+  iDigitalSig = 0;
+  pinMode(D_PIN, INPUT);
+}
+void loop()
+{
+  iAnalogSig = (float)analogRead(A_PIN);
+  iDigitalSig = digitalRead(D_PIN);
+
+  mag = !iDigitalSig;
+  hall = iAnalogSig;
+  //(3.3f * iAnalogSig / 4096.0f)
+  Serial.println("Analog Voltage: " + (String)(iAnalogSig) + " | Digital val: " + (String)iDigitalSig);
+
+
+  if(mag)
+  {
+    test1 = "过强";
+  }
+  else
+  {
+    test1 = "正常";
+  }
+
+  u8g2.clearBuffer();
+
+  u8g2.setFont(u8g2_font_wqy16_t_gb2312); 
+  u8g2.setCursor(0,30);
+  u8g2.print(cc);
+  u8g2.setCursor(0,60);
+  u8g2.print(test1);
+
+  u8g2.sendBuffer();
+
+  if (!WiFi.isConnected()) // 先看WIFI是否还在连接
+  {
+    setupWifi();
+  }
+  if (!client.connected()) // 如果客户端没连接ONENET, 重新连接
+  {
+    clientReconnect();
+    delay(100);
+  }
+  client.loop(); // 客户端循环检测
+}

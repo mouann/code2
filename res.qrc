@@ -1,0 +1,21 @@
+<RCC>
+  <qresource prefix="loo">
+    <file>connect.jpg</file>
+    <file>loongson.1.jpg</file>
+    <file>close-one.svg</file>
+    <file>home.svg</file>
+    <file>humidity.svg</file>
+    <file>luminance.svg</file>
+    <file>mag.svg</file>
+    <file>temperature.svg</file>
+    <file>volume.svg</file>
+    <file>home1.png</file>
+    <file>humidity1.png</file>
+    <file>loongson.1.png</file>
+    <file>luminance1.png</file>
+    <file>magnet.png</file>
+    <file>temperature1.png</file>
+    <file>unconnect.png</file>
+    <file>volume1.png</file>
+  </qresource>
+</RCC>
